@@ -1,0 +1,112 @@
+---
+title: "Practical Machine Learning - Course Project0"
+author: "R. Rodríguez"
+date: "25/01/2015"
+output: html_document
+---
+
+This document is a course project write up for the "Practical Machine Learning" course on coursera.org ([Course page](https://class.coursera.org/predmachlearn-010)).
+
+The aim of this project is to predict the way a weight lifting exercise was done by using machine learning on a collection of biometric data.
+
+---
+
+
+The first step is to load the needed packages, initialize the random seed to achieve reproducible results, and set up the parallel environment. Then, we load both the training and testing data sets. We will only examine the training data, but we will apply the same treatment to both datasets to have coherent data sets.
+
+```{r, message=F}
+library(caret)
+library(doParallel)
+
+set.seed(654321)
+
+nodes <- 2L # We will only allocate two cores to the training job
+cl <- makeCluster(nodes)
+registerDoParallel(cl)
+
+training <- read.csv("pml-training.csv", na.strings = c("NA", ""))
+testing <- read.csv("pml-testing.csv", na.strings = c("NA", ""))
+```
+
+To start with the cleaning of the data, we drop the first seven columns which do not seem related to the exercise. We also drop columns which contain "NA"s in more than 20% of the samples.
+
+```{r}
+training <- training[,c(-1:-7)]
+testing <- testing[,c(-1:-7)]
+
+samples <- dim(training)[1]
+
+nonNAs <- apply(training, 2, function(x) { sum(!is.na(x)) })
+training <- training[, which(nonNAs > 0.8 * samples)]
+testing <- testing[, which(nonNAs > 0.8 * samples)]
+```
+
+At this point, the training and test sets have `r dim(training)[2]` columns or predictors. We should also eliminate predictors with a near zero variance, but a call to `nearZeroVar` on the training set returns zero rows, which means that all our current predictors have a significant variance.
+
+Next step is to check for correlation among the predictors. We will do this using a heatmap:
+
+```{r}
+corrtraining <- cor(training[, names(training) != "classe"])
+heatmap(corrtraining) #, col = pal)
+```
+
+We observe that, while there are some correlated predictors (white - yellow or dark orange - red zones ), the correlation between most of them is not too high (prevalence of middle tone orange colors). This will be tolerated by the model we are going to use.
+
+At this point we consider we have cleaned the data, so we proceed to the construction of the predictive model.
+
+We will use random forests. Our choice of this model is based on its properties: random forests are tolerant to non-linearity (for which we haven't tested the data), robustness against outliers and correlated variables (we neither tested for outlierts, and we already saw we have some correlated predictors), and good suitability to extrapolate variable importance and generalization errors.
+
+But before we build the model we will apply PCA to try to reduce the number of predictors and speed up the training proces. We will retain 90% of the variance:
+
+```{r}
+PCAmodel <- preProcess(training[,-53], method="pca", thresh=0.90)
+trainingPC <- predict(PCAmodel, training[,-53])
+testingPC <- predict(PCAmodel, testing[,-53])
+
+trainingPC$classe <- training$classe
+testingPC$problem_id <- testing$problem_id
+```
+  
+This preprocessing allows us to reduce the number of predictors to `r dim(trainingPC)[2] - 1`. This reduces the training time in a substantial amount. Increasing this percentage, or skipping the PCA may improve the results, but also make the processing of the data much slower.
+
+To be able to check the accuracy and calculate the out-of-sample error, now we need to divide the training set into two subsets, one to train the model (75% of the data), and a second one to test the model on:
+
+```{r}
+subset <- createDataPartition(y = trainingPC$classe, p = 3/4, list = FALSE)
+build.training <- trainingPC[subset, ]
+test.training <- trainingPC[-subset, ]
+```
+
+```{r, echo=FALSE}
+rm(corrtraining)
+rm(training)
+rm(trainingPC)
+rm(testing)
+rm(subset)
+```
+
+Then we build the model, which takes a while to be processed:
+
+```{r, message=F, cache=TRUE}
+tc <- trainControl(method = "cv", number = 4, allowParallel = TRUE)
+model <- train(classe ~ ., data = build.training, method = "rf", trControl = tc)
+```
+
+Finally, we check the model and calculate the training accuracy:
+
+```{r}
+model
+trainingAccuracy <- round(max(model$results$Accuracy), 4) * 100
+trainingAccuracy
+```
+
+Finally, we validate the training with the test subsample we split before creating the model:
+
+```{r}
+prediction.training <- predict(model, test.training)
+confMat <- confusionMatrix(prediction.training, test.training$classe)
+confMat
+```
+
+The overall accuracy we achieved in the cross validation is `r round(confMat$overall[1] * 100, 2)`%, and thus, the out of sample error is `r round((1. - confMat$overall[1]) * 100, 2)`%.
+
