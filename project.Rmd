@@ -1,5 +1,5 @@
 ---
-title: "Practical Machine Learning - Course Project0"
+title: "Practical Machine Learning - Course Project"
 author: "R. Rodríguez"
 date: "25/01/2015"
 output: html_document
